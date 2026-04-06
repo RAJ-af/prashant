@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Study Hub | Prashant Gupta</title>
+    <link rel="stylesheet" href="static/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <div class="logo-section">
+            <h1>📚 Smart Study Hub</h1>
+            <p class="user-info">Prashant Gupta | Class 10</p>
+        </div>
+        <div class="controls">
+            <button id="timer-toggle" class="btn secondary">⏲️ Focus Timer</button>
+            <button id="todo-toggle" class="btn secondary">📝 To-Do List</button>
+            <label for="pdf-upload" class="btn primary">📁 Upload Book PDF</label>
+            <input type="file" id="pdf-upload" accept="application/pdf" style="display: none;">
+        </div>
+    </header>
+
+    <main>
+        <div id="welcome-screen" class="card">
+            <div class="human-touch">
+                <h2>Good Day, Prashant! 👋</h2>
+                <p>Ready to turn your books into notes?</p>
+            </div>
+            <div class="features">
+                <div class="feature card">
+                    <span class="icon">✨</span>
+                    <h3>Smart Notes</h3>
+                    <p>AI highlights the most important sentences for your exams.</p>
+                </div>
+                <div class="feature card">
+                    <span class="icon">⏲️</span>
+                    <h3>Concentrate</h3>
+                    <p>25-minute Pomodoro sessions to stay productive.</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="viewer-container" class="hidden">
+            <div id="pdf-viewer"></div>
+            <div id="loading-overlay" class="hidden">
+                <div class="spinner"></div>
+                <p>Reading your book and preparing highlights...</p>
+            </div>
+        </div>
+
+        <!-- Timer Modal -->
+        <div id="timer-modal" class="modal hidden">
+            <div class="modal-content card">
+                <h3>Focus Timer</h3>
+                <div id="timer-display">25:00</div>
+                <div class="timer-controls">
+                    <button id="start-timer" class="btn primary">Start</button>
+                    <button id="reset-timer" class="btn secondary">Reset</button>
+                </div>
+                <button id="close-timer" class="btn-text">Close</button>
+            </div>
+        </div>
+
+        <!-- To-Do Modal -->
+        <div id="todo-modal" class="modal hidden">
+            <div class="modal-content card">
+                <h3>Study Goals</h3>
+                <div class="todo-input">
+                    <input type="text" id="todo-task" placeholder="New goal...">
+                    <button id="add-todo" class="btn primary">+</button>
+                </div>
+                <ul id="todo-list"></ul>
+                <button id="close-todo" class="btn-text">Close</button>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>Stay focused, Prashant! You are doing great in Class 10. 🌟</p>
+    </footer>
+
+    <script src="static/script.js"></script>
+</body>
+</html>
