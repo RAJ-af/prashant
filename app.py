@@ -15,8 +15,11 @@ CONFIG_FILE = "config.json"
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"DEBUG: Error loading config file: {e}")
     return {
         "api_key": os.getenv("OPENROUTER_API_KEY", ""),
         "model_name": "qwen/qwen-2.5-72b-instruct:free"
@@ -45,11 +48,14 @@ class HighlightRequest(BaseModel):
 
 @app.post("/api/process-pdf")
 async def process_pdf(request: HighlightRequest):
+    print("DEBUG: Received request for /api/process-pdf")
     current_config = load_config()
     api_key = current_config.get("api_key")
     model_name = current_config.get("model_name")
 
+    print(f"DEBUG: Using model: {model_name}")
     if not api_key:
+        print("DEBUG ERROR: API key is missing in config.json")
         raise HTTPException(status_code=500, detail="OpenRouter API key not configured. Please set it in the admin panel.")
 
     prompt = f"""
@@ -65,6 +71,7 @@ async def process_pdf(request: HighlightRequest):
 
     async with httpx.AsyncClient() as client:
         try:
+            print(f"DEBUG: Sending request to OpenRouter with model {model_name}")
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -80,12 +87,14 @@ async def process_pdf(request: HighlightRequest):
                 timeout=60.0
             )
 
+            print(f"DEBUG: OpenRouter status code: {response.status_code}")
             if response.status_code != 200:
-                print(f"Error from OpenRouter: {response.text}")
-                raise HTTPException(status_code=response.status_code, detail="Error from OpenRouter API")
+                print(f"DEBUG ERROR from OpenRouter: {response.text}")
+                raise HTTPException(status_code=response.status_code, detail=f"OpenRouter API error: {response.text}")
 
             data = response.json()
             ai_message = data['choices'][0]['message']['content']
+            print(f"DEBUG: AI Response received (length: {len(ai_message)})")
 
             # Basic cleanup in case AI adds markdown code blocks
             ai_message = ai_message.strip()
@@ -98,8 +107,8 @@ async def process_pdf(request: HighlightRequest):
 
             return {"highlights": ai_message.strip()}
         except Exception as e:
-            print(f"Exception: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
+            print(f"DEBUG EXCEPTION: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @app.post("/api/config")
 async def update_config(data: dict = Body(...)):
@@ -112,6 +121,7 @@ async def update_config(data: dict = Body(...)):
         "model_name": data.get("model_name")
     }
     save_config(new_config)
+    print("DEBUG: Config updated via /admin")
     return {"status": "success"}
 
 @app.get("/api/config")

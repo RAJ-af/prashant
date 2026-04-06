@@ -2,7 +2,7 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
 let pdfDoc = null;
-let pdfScale = 1.2;
+let pdfScale = 1.5; // Base scale
 let pageTextContent = {}; // Store text content per page
 
 const pdfUpload = document.getElementById('pdf-upload');
@@ -20,28 +20,44 @@ async function handleFileUpload(e) {
     const file = e.target.files[0];
     if (!file || file.type !== 'application/pdf') return;
 
+    console.log("DEBUG: File selected:", file.name);
     welcomeScreen.classList.add('hidden');
     viewerContainer.classList.remove('hidden');
     loadingOverlay.classList.remove('hidden');
 
     const reader = new FileReader();
     reader.onload = async function() {
+        console.log("DEBUG: File read into buffer");
         const typedarray = new Uint8Array(this.result);
-        pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
-        await renderPDF();
-        processPDFText();
+        try {
+            pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
+            console.log("DEBUG: PDF loaded, num pages:", pdfDoc.numPages);
+            await renderPDF();
+            processPDFText();
+        } catch (err) {
+            console.error("DEBUG ERROR: Failed to load PDF:", err);
+            alert("Error loading PDF. Please try again.");
+            loadingOverlay.classList.add('hidden');
+        }
     };
     reader.readAsArrayBuffer(file);
 }
 
 async function renderPDF() {
+    console.log("DEBUG: Rendering PDF...");
     pdfViewer.innerHTML = '';
-    // Determine scale based on container width for responsiveness
+
+    // Better scale calculation for high quality
     const containerWidth = pdfViewer.clientWidth - 40;
     const firstPage = await pdfDoc.getPage(1);
     const originalViewport = firstPage.getViewport({ scale: 1 });
-    pdfScale = containerWidth / originalViewport.width;
-    if (pdfScale > 1.5) pdfScale = 1.5; // Cap maximum scale
+
+    // Target a higher resolution (e.g., 2.0x device pixel ratio equivalent)
+    pdfScale = (containerWidth / originalViewport.width) * 1.5;
+    if (pdfScale < 1.5) pdfScale = 1.5;
+    if (pdfScale > 2.5) pdfScale = 2.5;
+
+    console.log("DEBUG: Using scale:", pdfScale);
 
     for (let i = 1; i <= pdfDoc.numPages; i++) {
         const page = await pdfDoc.getPage(i);
@@ -53,6 +69,10 @@ async function renderPDF() {
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
+
+        // Match CSS width to container, but internal canvas size is larger for quality
+        canvas.style.width = "100%";
+        canvas.style.maxWidth = originalViewport.width * pdfScale + "px";
         canvas.height = viewport.height;
         canvas.width = viewport.width;
 
@@ -60,6 +80,7 @@ async function renderPDF() {
         pdfViewer.appendChild(pageContainer);
 
         await page.render({ canvasContext: context, viewport: viewport }).promise;
+        console.log(`DEBUG: Page ${i} rendered`);
 
         const textContent = await page.getTextContent();
         pageTextContent[i] = textContent.items;
@@ -67,6 +88,7 @@ async function renderPDF() {
 }
 
 async function processPDFText() {
+    console.log("DEBUG: Extracting text for AI...");
     let fullText = "";
     // Only process first 10 pages to keep it fast
     const maxPages = Math.min(pdfDoc.numPages, 10);
@@ -76,6 +98,7 @@ async function processPDFText() {
         fullText += textContent.items.map(item => item.str).join(' ') + " ";
     }
 
+    console.log(`DEBUG: Sending ${fullText.length} characters to backend`);
     try {
         const response = await fetch('/api/process-pdf', {
             method: 'POST',
@@ -83,18 +106,29 @@ async function processPDFText() {
             body: JSON.stringify({ text: fullText })
         });
 
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || "Backend error");
+        }
+
         const data = await response.json();
+        console.log("DEBUG: Received highlights from backend:", data.highlights);
+
         let sentencesToHighlight = [];
         try {
             sentencesToHighlight = JSON.parse(data.highlights);
         } catch (e) {
-            // Fallback if AI didn't return perfect JSON
-            sentencesToHighlight = data.highlights.split('\n').filter(s => s.trim().length > 10);
+            console.warn("DEBUG: AI did not return valid JSON, attempting split fallback");
+            sentencesToHighlight = data.highlights.split('\n')
+                .map(s => s.replace(/^[-\d.]+\s*/, '').trim())
+                .filter(s => s.length > 10);
         }
 
+        console.log(`DEBUG: Applying ${sentencesToHighlight.length} highlights`);
         applyHighlights(sentencesToHighlight);
     } catch (err) {
-        console.error("AI Highlighting failed", err);
+        console.error("DEBUG ERROR: AI Highlighting failed:", err);
+        alert(`Highlighting error: ${err.message}`);
     } finally {
         loadingOverlay.classList.add('hidden');
     }
@@ -113,7 +147,7 @@ function applyHighlights(sentences) {
 
             const pageContainer = document.querySelector(`.page-container[data-pageNumber="${pageNum}"]`);
 
-            // Use already calculated scale
+            // Use calculated scale
             pdfDoc.getPage(pageNum).then(page => {
                 const viewport = page.getViewport({ scale: pdfScale });
 
@@ -125,14 +159,14 @@ function applyHighlights(sentences) {
                         highlight.className = 'highlight-span';
                         highlight.style.position = 'absolute';
 
-                        // Positioning
+                        // Positioning based on PDF.js transform
                         highlight.style.left = tx[4] + 'px';
                         highlight.style.top = (tx[5] - (item.height * pdfScale)) + 'px';
                         highlight.style.width = (item.width * pdfScale) + 'px';
                         highlight.style.height = (item.height * pdfScale * 1.2) + 'px';
 
-                        // Human-like effect: random slight rotation
-                        const rotation = (Math.random() - 0.5) * 2; // -1 to 1 degree
+                        // Aesthetic effects
+                        const rotation = (Math.random() - 0.5) * 1.5;
                         highlight.style.transform = `rotate(${rotation}deg)`;
                         highlight.style.pointerEvents = 'none';
                         highlight.style.zIndex = '10';
@@ -145,7 +179,7 @@ function applyHighlights(sentences) {
     });
 }
 
-// Timer Logic
+// Timer & To-Do Logic
 const timerToggle = document.getElementById('timer-toggle');
 const timerModal = document.getElementById('timer-modal');
 const closeTimer = document.getElementById('close-timer');
@@ -171,7 +205,7 @@ startTimerBtn.addEventListener('click', () => {
             updateTimerDisplay();
             if (timeLeft <= 0) {
                 clearInterval(timerId);
-                alert("Study session complete! Take a break.");
+                alert("Study session complete!");
             }
         }, 1000);
     }
@@ -191,7 +225,6 @@ function updateTimerDisplay() {
     timerDisplay.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-// To-Do Logic
 const todoToggle = document.getElementById('todo-toggle');
 const todoModal = document.getElementById('todo-modal');
 const closeTodo = document.getElementById('close-todo');
