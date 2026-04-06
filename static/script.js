@@ -114,16 +114,7 @@ async function processPDFText() {
         const data = await response.json();
         console.log("DEBUG: Received highlights from backend:", data.highlights);
 
-        let sentencesToHighlight = [];
-        try {
-            sentencesToHighlight = JSON.parse(data.highlights);
-        } catch (e) {
-            console.warn("DEBUG: AI did not return valid JSON, attempting split fallback");
-            sentencesToHighlight = data.highlights.split('\n')
-                .map(s => s.replace(/^[-\d.]+\s*/, '').trim())
-                .filter(s => s.length > 10);
-        }
-
+        const sentencesToHighlight = JSON.parse(data.highlights);
         console.log(`DEBUG: Applying ${sentencesToHighlight.length} highlights`);
         applyHighlights(sentencesToHighlight);
     } catch (err) {
@@ -138,8 +129,10 @@ function applyHighlights(sentences) {
     if (!Array.isArray(sentences)) return;
 
     sentences.forEach(sentence => {
-        const cleanSentence = sentence.toLowerCase().trim();
+        const cleanSentence = sentence.toLowerCase().trim().replace(/\s+/g, ' ');
         if (cleanSentence.length < 5) return;
+
+        console.log(`DEBUG: Looking for match for sentence: "${cleanSentence.substring(0, 50)}..."`);
 
         for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
             const items = pageTextContent[pageNum];
@@ -152,7 +145,8 @@ function applyHighlights(sentences) {
                 const viewport = page.getViewport({ scale: pdfScale });
 
                 items.forEach(item => {
-                    if (item.str.trim().length > 2 && cleanSentence.includes(item.str.toLowerCase().trim())) {
+                    const itemStr = item.str.toLowerCase().trim().replace(/\s+/g, ' ');
+                    if (itemStr.length > 2 && (cleanSentence.includes(itemStr) || itemStr.includes(cleanSentence))) {
                         const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
 
                         const highlight = document.createElement('div');
