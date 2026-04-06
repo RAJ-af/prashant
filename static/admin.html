@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel | SmartStudy AI</title>
+    <link rel="stylesheet" href="static/style.css">
+    <style>
+        .admin-container {
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            border: 1px solid var(--paper-line);
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        input {
+            width: 100%;
+            padding: 0.8rem;
+            border: 1px solid var(--paper-line);
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        #login-section {
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>SmartStudy AI</h1>
+        <div class="branding">Admin Dashboard</div>
+    </header>
+
+    <main>
+        <!-- Password Login Section -->
+        <div id="login-section" class="admin-container">
+            <h3>Admin Access</h3>
+            <p style="margin-bottom: 1.5rem; color: var(--text-secondary);">Please enter the admin password.</p>
+            <div class="form-group">
+                <input type="password" id="admin-password" placeholder="Password">
+            </div>
+            <button id="login-btn" class="btn">Access Dashboard</button>
+        </div>
+
+        <!-- Dashboard Section -->
+        <div id="dashboard-section" class="admin-container hidden">
+            <h3>API Settings</h3>
+            <p style="margin-bottom: 1.5rem; color: var(--text-secondary);">Update your OpenRouter configuration.</p>
+
+            <div class="form-group">
+                <label for="api-key">OpenRouter API Key</label>
+                <input type="password" id="api-key" placeholder="sk-or-v1-...">
+            </div>
+
+            <div class="form-group">
+                <label for="model-name">Model Name</label>
+                <input type="text" id="model-name" placeholder="e.g., qwen/qwen-2.5-72b-instruct:free">
+            </div>
+
+            <button id="save-btn" class="btn">Save Changes</button>
+            <p id="status-msg" style="margin-top: 1rem; font-size: 0.9rem;"></p>
+        </div>
+    </main>
+
+    <script>
+        const loginSection = document.getElementById('login-section');
+        const dashboardSection = document.getElementById('dashboard-section');
+        const passwordInput = document.getElementById('admin-password');
+        const apiKeyInput = document.getElementById('api-key');
+        const modelNameInput = document.getElementById('model-name');
+        const statusMsg = document.getElementById('status-msg');
+
+        document.getElementById('login-btn').addEventListener('click', async () => {
+            const password = passwordInput.value;
+            try {
+                const response = await fetch(`/api/config?password=${password}`);
+                if (response.ok) {
+                    const config = await response.json();
+                    apiKeyInput.value = config.api_key;
+                    modelNameInput.value = config.model_name;
+                    loginSection.classList.add('hidden');
+                    dashboardSection.classList.remove('hidden');
+                } else {
+                    alert('Invalid password');
+                }
+            } catch (err) {
+                alert('Connection error');
+            }
+        });
+
+        document.getElementById('save-btn').addEventListener('click', async () => {
+            const data = {
+                password: passwordInput.value,
+                api_key: apiKeyInput.value,
+                model_name: modelNameInput.value
+            };
+
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    statusMsg.textContent = 'Settings saved successfully!';
+                    statusMsg.style.color = 'green';
+                } else {
+                    statusMsg.textContent = 'Error saving settings.';
+                    statusMsg.style.color = 'red';
+                }
+            } catch (err) {
+                statusMsg.textContent = 'Connection error.';
+                statusMsg.style.color = 'red';
+            }
+        });
+    </script>
+</body>
+</html>

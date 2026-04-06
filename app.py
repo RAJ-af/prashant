@@ -1,5 +1,6 @@
 import os
-from fastapi import FastAPI, Request, HTTPException
+import json
+from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import httpx
@@ -10,6 +11,24 @@ load_dotenv()
 
 app = FastAPI()
 
+CONFIG_FILE = "config.json"
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    return {
+        "api_key": os.getenv("OPENROUTER_API_KEY", ""),
+        "model_name": "qwen/qwen-2.5-72b-instruct:free"
+    }
+
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
+
+# Initialize config
+config = load_config()
+
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -17,19 +36,27 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def read_index():
     return FileResponse('static/index.html')
 
+@app.get("/admin")
+async def read_admin():
+    return FileResponse('static/admin.html')
+
 class HighlightRequest(BaseModel):
     text: str
 
 @app.post("/api/process-pdf")
 async def process_pdf(request: HighlightRequest):
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    current_config = load_config()
+    api_key = current_config.get("api_key")
+    model_name = current_config.get("model_name")
+
     if not api_key:
-        raise HTTPException(status_code=500, detail="OpenRouter API key not configured in environment variables.")
+        raise HTTPException(status_code=500, detail="OpenRouter API key not configured. Please set it in the admin panel.")
 
     prompt = f"""
     You are an expert study assistant. I will provide you with text extracted from a book.
     Your task is to identify the most important sentences that should be highlighted for study notes.
-    Return ONLY a JSON list of strings, where each string is a sentence from the text that should be highlighted.
+    Return ONLY a JSON list of strings, where each string represent a sentence from the text that should be highlighted.
+    Be selective: only highlight key definitions, main arguments, and crucial facts. Avoid common words or filler sentences.
     Do not add any explanations or other text.
 
     Text:
@@ -45,7 +72,7 @@ async def process_pdf(request: HighlightRequest):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "qwen/qwen-2.5-72b-instruct:free",
+                    "model": model_name,
                     "messages": [
                         {"role": "user", "content": prompt}
                     ]
@@ -74,6 +101,26 @@ async def process_pdf(request: HighlightRequest):
             print(f"Exception: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/config")
+async def update_config(data: dict = Body(...)):
+    password = data.get("password")
+    if password != "6699":
+        raise HTTPException(status_code=403, detail="Invalid password")
+
+    new_config = {
+        "api_key": data.get("api_key"),
+        "model_name": data.get("model_name")
+    }
+    save_config(new_config)
+    return {"status": "success"}
+
+@app.get("/api/config")
+async def get_config(password: str):
+    if password != "6699":
+        raise HTTPException(status_code=403, detail="Invalid password")
+    return load_config()
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    port = int(os.environ.get("PORT", 7860))
+    uvicorn.run(app, host="0.0.0.0", port=port)
