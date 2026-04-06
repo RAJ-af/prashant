@@ -2,10 +2,11 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
 let pdfDoc = null;
-let pdfScale = 1.5;
+let pdfScale = 1.2;
 let pageTextContent = {}; // Store text content per page
 
 const pdfUpload = document.getElementById('pdf-upload');
+const pdfReupload = document.getElementById('pdf-reupload');
 const welcomeScreen = document.getElementById('welcome-screen');
 const viewerContainer = document.getElementById('viewer-container');
 const pdfViewer = document.getElementById('pdf-viewer');
@@ -13,6 +14,7 @@ const loadingOverlay = document.getElementById('loading-overlay');
 
 // Event Listeners
 pdfUpload.addEventListener('change', handleFileUpload);
+pdfReupload.addEventListener('change', handleFileUpload);
 
 async function handleFileUpload(e) {
     const file = e.target.files[0];
@@ -34,14 +36,19 @@ async function handleFileUpload(e) {
 
 async function renderPDF() {
     pdfViewer.innerHTML = '';
+    // Determine scale based on container width for responsiveness
+    const containerWidth = pdfViewer.clientWidth - 40;
+    const firstPage = await pdfDoc.getPage(1);
+    const originalViewport = firstPage.getViewport({ scale: 1 });
+    pdfScale = containerWidth / originalViewport.width;
+    if (pdfScale > 1.5) pdfScale = 1.5; // Cap maximum scale
+
     for (let i = 1; i <= pdfDoc.numPages; i++) {
         const page = await pdfDoc.getPage(i);
         const viewport = page.getViewport({ scale: pdfScale });
 
         const pageContainer = document.createElement('div');
         pageContainer.className = 'page-container';
-        pageContainer.style.position = 'relative';
-        pageContainer.style.marginBottom = '20px';
         pageContainer.dataset.pageNumber = i;
 
         const canvas = document.createElement('canvas');
@@ -106,7 +113,7 @@ function applyHighlights(sentences) {
 
             const pageContainer = document.querySelector(`.page-container[data-pageNumber="${pageNum}"]`);
 
-            // Get viewport to convert PDF coordinates to pixels
+            // Use already calculated scale
             pdfDoc.getPage(pageNum).then(page => {
                 const viewport = page.getViewport({ scale: pdfScale });
 
@@ -124,11 +131,9 @@ function applyHighlights(sentences) {
                         highlight.style.width = (item.width * pdfScale) + 'px';
                         highlight.style.height = (item.height * pdfScale * 1.2) + 'px';
 
-                        // Human-like effect: random slight rotation and opacity
+                        // Human-like effect: random slight rotation
                         const rotation = (Math.random() - 0.5) * 2; // -1 to 1 degree
                         highlight.style.transform = `rotate(${rotation}deg)`;
-                        highlight.style.backgroundColor = 'rgba(255, 235, 59, 0.45)';
-                        highlight.style.borderRadius = '2px';
                         highlight.style.pointerEvents = 'none';
                         highlight.style.zIndex = '10';
 
@@ -151,15 +156,8 @@ const resetTimerBtn = document.getElementById('reset-timer');
 let timeLeft = 25 * 60;
 let timerId = null;
 
-timerToggle.addEventListener('click', () => {
-    timerModal.classList.remove('hidden');
-    timerModal.style.display = 'flex';
-});
-
-closeTimer.addEventListener('click', () => {
-    timerModal.classList.add('hidden');
-    timerModal.style.display = 'none';
-});
+timerToggle.addEventListener('click', () => timerModal.classList.remove('hidden'));
+closeTimer.addEventListener('click', () => timerModal.classList.add('hidden'));
 
 startTimerBtn.addEventListener('click', () => {
     if (timerId) {
@@ -201,15 +199,8 @@ const todoTask = document.getElementById('todo-task');
 const addTodo = document.getElementById('add-todo');
 const todoList = document.getElementById('todo-list');
 
-todoToggle.addEventListener('click', () => {
-    todoModal.classList.remove('hidden');
-    todoModal.style.display = 'flex';
-});
-
-closeTodo.addEventListener('click', () => {
-    todoModal.classList.add('hidden');
-    todoModal.style.display = 'none';
-});
+todoToggle.addEventListener('click', () => todoModal.classList.remove('hidden'));
+closeTodo.addEventListener('click', () => todoModal.classList.add('hidden'));
 
 addTodo.addEventListener('click', () => {
     if (todoTask.value.trim()) {
