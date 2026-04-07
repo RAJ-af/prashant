@@ -35,7 +35,6 @@ def load_prompt():
     if os.path.exists(PROMPT_FILE):
         with open(PROMPT_FILE, "r") as f:
             return f.read()
-    # Fallback prompt if file not found
     return "Identify key sentences in this text for study highlights. Return a JSON array of strings: {text}"
 
 # Initialize config
@@ -57,21 +56,22 @@ class HighlightRequest(BaseModel):
 
 @app.post("/api/process-pdf")
 async def process_pdf(request: HighlightRequest):
-    print("DEBUG: Received request for /api/process-pdf")
+    print("DEBUG: Processing PDF request...")
     current_config = load_config()
     api_key = current_config.get("api_key")
     model_name = current_config.get("model_name")
 
     if not api_key:
-        print("DEBUG ERROR: API key is missing in config.json")
-        raise HTTPException(status_code=500, detail="OpenRouter API key not configured. Please set it in the admin panel.")
+        print("DEBUG ERROR: API key is missing")
+        raise HTTPException(status_code=500, detail="OpenRouter API key not configured.")
 
     prompt_template = load_prompt()
-    prompt = prompt_template.format(text=request.text[:4000])
+    text_content = request.text[:4000]
+    prompt = prompt_template.replace("{text}", text_content)
 
     async with httpx.AsyncClient() as client:
         try:
-            print(f"DEBUG: Sending request to OpenRouter with model {model_name}")
+            print(f"DEBUG: Calling OpenRouter with model {model_name}")
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -84,62 +84,43 @@ async def process_pdf(request: HighlightRequest):
                         {"role": "user", "content": prompt}
                     ]
                 },
-                timeout=60.0
+                timeout=90.0
             )
 
-            print(f"DEBUG: OpenRouter status code: {response.status_code}")
+            print(f"DEBUG: OpenRouter status: {response.status_code}")
             if response.status_code != 200:
-                print(f"DEBUG ERROR from OpenRouter: {response.text}")
-                raise HTTPException(status_code=response.status_code, detail=f"OpenRouter API error: {response.text}")
+                print(f"DEBUG ERROR: {response.text}")
+                raise HTTPException(status_code=response.status_code, detail=f"OpenRouter error: {response.text}")
 
             data = response.json()
-            raw_ai_message = data['choices'][0]['message']['content']
-            print(f"DEBUG: Raw AI Response: {raw_ai_message}")
+            raw_content = data['choices'][0]['message']['content']
+            print(f"DEBUG: Raw AI Output length: {len(raw_content)}")
 
-            # Robust JSON cleaning and extraction
-            cleaned_message = raw_ai_message.strip()
-
-            # Remove markdown code blocks if present
-            if "```" in cleaned_message:
-                match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_message)
+            # Robust extraction logic
+            cleaned = raw_content.strip()
+            if '```' in cleaned:
+                match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', cleaned)
                 if match:
-                    cleaned_message = match.group(1).strip()
+                    cleaned = match.group(1).strip()
 
-            highlights_list = []
             try:
-                # Try strict JSON parsing
-                highlights_list = json.loads(cleaned_message)
-                if not isinstance(highlights_list, list):
-                    # If it's a JSON object but not a list, it's unexpected
-                    raise ValueError("JSON response is not a list")
-                print("DEBUG: Successfully parsed JSON list")
-            except (json.JSONDecodeError, ValueError) as e:
-                print(f"DEBUG ERROR: JSON parsing failed ({e}). Attempting robust extraction...")
+                highlights = json.loads(cleaned)
+                if not isinstance(highlights, list):
+                    highlights = []
+            except (json.JSONDecodeError, ValueError):
+                highlights = re.findall(r'"([^"]{10,})"', cleaned)
+                if not highlights:
+                    highlights = [line.strip('"-* 123456789. ') for line in re.split(r'\. |\n', cleaned) if len(line.strip()) > 15]
 
-                # Fallback: Extract strings between quotes or lines
-                # Pattern to match anything inside double quotes that is at least 10 chars
-                fallback_matches = re.findall(r'"([^"]{10,})"', cleaned_message)
-                if fallback_matches:
-                    highlights_list = fallback_matches
-                    print(f"DEBUG: Extracted {len(highlights_list)} sentences using quote extraction")
-                else:
-                    # Last resort: Split by lines and clean numbering
-                    lines = cleaned_message.split('\n')
-                    for line in lines:
-                        clean_line = re.sub(r'^[-\d.\s\*]+', '', line).strip()
-                        if len(clean_line) > 10:
-                            highlights_list.append(clean_line)
-                    print(f"DEBUG: Extracted {len(highlights_list)} sentences using line split")
-
-            return {"highlights": json.dumps(highlights_list)}
+            print(f"DEBUG: Final highlights count: {len(highlights)}")
+            return {"highlights": json.dumps(highlights)}
         except Exception as e:
             print(f"DEBUG EXCEPTION: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/config")
 async def update_config(data: dict = Body(...)):
-    password = data.get("password")
-    if password != "6699":
+    if data.get("password") != "6699":
         raise HTTPException(status_code=403, detail="Invalid password")
 
     new_config = {
@@ -147,7 +128,6 @@ async def update_config(data: dict = Body(...)):
         "model_name": data.get("model_name")
     }
     save_config(new_config)
-    print("DEBUG: Config updated via /admin")
     return {"status": "success"}
 
 @app.get("/api/config")

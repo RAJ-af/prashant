@@ -1,4 +1,4 @@
 {
-    "api_key": "",
+    "api_key": "test-key",
     "model_name": "qwen/qwen-2.5-72b-instruct:free"
 }

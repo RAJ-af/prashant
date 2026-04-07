@@ -1,6 +1,3 @@
-// PDF.js configuration
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-
 let pdfDoc = null;
 let pdfScale = 1.5;
 let pageTextData = {};
@@ -54,54 +51,47 @@ async function renderAndProcessPDF() {
     console.log("DEBUG: Starting page-by-page processing...");
 
     for (let i = 1; i <= pdfDoc.numPages; i++) {
-        // 1. Render Page
         const page = await pdfDoc.getPage(i);
         const viewport = page.getViewport({ scale: pdfScale });
 
         const pageContainer = document.createElement('div');
         pageContainer.className = 'page-container';
         pageContainer.dataset.pageNumber = i;
-        pageContainer.innerHTML = `<div class="page-status">Reading page ${i}...</div>`;
+        pageContainer.innerHTML = \`<div class="page-status">Reading page \${i}...</div>\`;
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-        canvas.style.width = "100%";
-        canvas.style.maxWidth = originalViewport.width * pdfScale + "px";
         canvas.height = viewport.height;
         canvas.width = viewport.width;
 
-        pageContainer.appendChild(canvas);
+        // We need a wrapper for the canvas and highlights to handle scaling correctly
+        const canvasWrapper = document.createElement('div');
+        canvasWrapper.className = 'canvas-wrapper';
+        canvasWrapper.style.position = 'relative';
+        canvasWrapper.style.width = 'fit-content';
+
+        canvasWrapper.appendChild(canvas);
+        pageContainer.appendChild(canvasWrapper);
         pdfViewer.appendChild(pageContainer);
 
         await page.render({ canvasContext: context, viewport: viewport }).promise;
 
-        // 2. Extract Text
         const textContent = await page.getTextContent();
-
-        // Build a mapping for robust multi-word matching
-        // pageTextData stores both raw items and a concatenated normalized string
         let combinedString = "";
-        let itemMappings = [];
-
-        textContent.items.forEach((item, index) => {
-            const start = combinedString.length;
+        textContent.items.forEach(item => {
             combinedString += item.str + " ";
-            const end = combinedString.length;
-            itemMappings.push({ start, end, item });
         });
 
         pageTextData[i] = {
             items: textContent.items,
-            combinedString: combinedString,
-            mappings: itemMappings
+            combinedString: combinedString
         };
 
-        // 3. Process with AI (Progressive)
-        processPageText(i, combinedString, pageContainer);
+        processPageText(i, combinedString, pageContainer, viewport);
     }
 }
 
-async function processPageText(pageNum, text, container) {
+async function processPageText(pageNum, text, container, viewport) {
     if (!text.trim() || text.length < 20) {
         const status = container.querySelector('.page-status');
         if (status) status.remove();
@@ -120,79 +110,78 @@ async function processPageText(pageNum, text, container) {
         const data = await response.json();
         const highlights = JSON.parse(data.highlights);
 
-        console.log(`DEBUG: Page ${pageNum} highlights:`, highlights.length);
-        applyHighlightsToPage(pageNum, highlights);
+        console.log(\`DEBUG: Page \${pageNum} highlights:\`, highlights);
+        applyHighlightsToPage(pageNum, highlights, container, viewport);
 
     } catch (err) {
-        console.error(`DEBUG ERROR: Page ${pageNum} AI failed:`, err);
+        console.error(\`DEBUG ERROR: Page \${pageNum} AI failed:\`, err);
     } finally {
         const status = container.querySelector('.page-status');
         if (status) status.remove();
     }
 }
 
-function applyHighlightsToPage(pageNum, sentences) {
+function applyHighlightsToPage(pageNum, sentences, container, viewport) {
     if (!Array.isArray(sentences) || sentences.length === 0) return;
 
     const pageData = pageTextData[pageNum];
-    const pageContainer = document.querySelector(`.page-container[data-pageNumber="${pageNum}"]`);
+    const canvasWrapper = container.querySelector('.canvas-wrapper');
 
-    pdfDoc.getPage(pageNum).then(page => {
-        const viewport = page.getViewport({ scale: pdfScale });
+    sentences.forEach(sentence => {
+        const cleanSentence = sentence.toLowerCase().trim().replace(/\\s+/g, ' ');
+        if (cleanSentence.length < 5) return;
 
-        sentences.forEach(sentence => {
-            const cleanSentence = sentence.toLowerCase().trim().replace(/\s+/g, ' ');
-            if (cleanSentence.length < 5) return;
+        console.log(\`DEBUG: Matching sentence: "\${cleanSentence}"\`);
 
-            // Search within the combined string for the match
-            const sourceStr = pageData.combinedString.toLowerCase().replace(/\s+/g, ' ');
-            const matchIndex = sourceStr.indexOf(cleanSentence);
+        // 1. Try to find items that are part of this sentence
+        let matchedItems = [];
 
-            if (matchIndex !== -1) {
-                // If we found a direct match in the combined string,
-                // identify which text items overlap with this match range
-                const matchStart = matchIndex;
-                const matchEnd = matchIndex + cleanSentence.length;
+        // Word-based scoring for items
+        const targetWords = cleanSentence.split(' ').filter(w => w.length > 3);
 
-                // Re-calculate the actual character positions in the original combinedString
-                // to account for whitespace normalization if necessary
-                // For simplicity, we fallback to partial matching on items if exact range mapping is too complex
+        pageData.items.forEach(item => {
+            const itemStr = item.str.toLowerCase().trim().replace(/\\s+/g, ' ');
+            if (itemStr.length < 2) return;
 
-                pageData.items.forEach(item => {
-                    const itemStr = item.str.toLowerCase().trim().replace(/\s+/g, ' ');
-                    if (itemStr.length > 2 && cleanSentence.includes(itemStr)) {
-                        createHighlightElement(pageContainer, viewport, item);
-                    }
-                });
+            // Direct inclusion check
+            if (cleanSentence.includes(itemStr) && itemStr.length > 3) {
+                matchedItems.push(item);
             } else {
-                // Fallback: piece-by-piece matching if sentence is slightly modified by AI
-                pageData.items.forEach(item => {
-                    const itemStr = item.str.toLowerCase().trim().replace(/\s+/g, ' ');
-                    if (itemStr.length > 4 && (cleanSentence.includes(itemStr) || itemStr.includes(cleanSentence))) {
-                        createHighlightElement(pageContainer, viewport, item);
-                    }
+                // Word overlap check
+                let matches = 0;
+                targetWords.forEach(word => {
+                    if (itemStr.includes(word)) matches++;
                 });
+                if (matches > 0 && (matches / targetWords.length > 0.3 || matches / itemStr.split(' ').length > 0.5)) {
+                    matchedItems.push(item);
+                }
             }
+        });
+
+        console.log(\`DEBUG: Found \${matchedItems.length} matching items for sentence\`);
+        matchedItems.forEach(item => {
+            createHighlightElement(canvasWrapper, viewport, item);
         });
     });
 }
 
-function createHighlightElement(container, viewport, item) {
+function createHighlightElement(wrapper, viewport, item) {
     const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
     const highlight = document.createElement('div');
     highlight.className = 'highlight-span';
     highlight.style.position = 'absolute';
-    highlight.style.left = tx[4] + 'px';
-    highlight.style.top = (tx[5] - (item.height * pdfScale)) + 'px';
-    highlight.style.width = (item.width * pdfScale) + 'px';
-    highlight.style.height = (item.height * pdfScale * 1.3) + 'px';
 
-    const rotation = (Math.random() - 0.5) * 1.5;
-    highlight.style.transform = `rotate(${rotation}deg)`;
+    const h = item.height * pdfScale;
+    const w = item.width * pdfScale;
+
+    highlight.style.left = tx[4] + 'px';
+    highlight.style.top = (tx[5] - h) + 'px';
+    highlight.style.width = w + 'px';
+    highlight.style.height = (h * 1.1) + 'px';
     highlight.style.pointerEvents = 'none';
     highlight.style.zIndex = '10';
 
-    container.appendChild(highlight);
+    wrapper.appendChild(highlight);
 }
 
 // Timer & To-Do Logic
@@ -238,7 +227,7 @@ resetTimerBtn.addEventListener('click', () => {
 function updateTimerDisplay() {
     const mins = Math.floor(timeLeft / 60);
     const secs = timeLeft % 60;
-    timerDisplay.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    timerDisplay.textContent = \`\${mins.toString().padStart(2, '0')}:\${secs.toString().padStart(2, '0')}\`;
 }
 
 const todoToggle = document.getElementById('todo-toggle');
