@@ -2,8 +2,8 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
 let pdfDoc = null;
-let pdfScale = 1.5; // Base scale
-let pageTextContent = {}; // Store text content per page
+let pdfScale = 1.5;
+let pageTextData = {};
 
 const pdfUpload = document.getElementById('pdf-upload');
 const pdfReupload = document.getElementById('pdf-reupload');
@@ -27,50 +27,44 @@ async function handleFileUpload(e) {
 
     const reader = new FileReader();
     reader.onload = async function() {
-        console.log("DEBUG: File read into buffer");
         const typedarray = new Uint8Array(this.result);
         try {
             pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
             console.log("DEBUG: PDF loaded, num pages:", pdfDoc.numPages);
-            await renderPDF();
-            processPDFText();
+            await renderAndProcessPDF();
         } catch (err) {
             console.error("DEBUG ERROR: Failed to load PDF:", err);
             alert("Error loading PDF. Please try again.");
+        } finally {
             loadingOverlay.classList.add('hidden');
         }
     };
     reader.readAsArrayBuffer(file);
 }
 
-async function renderPDF() {
-    console.log("DEBUG: Rendering PDF...");
+async function renderAndProcessPDF() {
     pdfViewer.innerHTML = '';
 
-    // Better scale calculation for high quality
+    // Calculate scale
     const containerWidth = pdfViewer.clientWidth - 40;
     const firstPage = await pdfDoc.getPage(1);
     const originalViewport = firstPage.getViewport({ scale: 1 });
+    pdfScale = Math.max(1.5, Math.min(2.5, (containerWidth / originalViewport.width) * 1.5));
 
-    // Target a higher resolution (e.g., 2.0x device pixel ratio equivalent)
-    pdfScale = (containerWidth / originalViewport.width) * 1.5;
-    if (pdfScale < 1.5) pdfScale = 1.5;
-    if (pdfScale > 2.5) pdfScale = 2.5;
-
-    console.log("DEBUG: Using scale:", pdfScale);
+    console.log("DEBUG: Starting page-by-page processing...");
 
     for (let i = 1; i <= pdfDoc.numPages; i++) {
+        // 1. Render Page
         const page = await pdfDoc.getPage(i);
         const viewport = page.getViewport({ scale: pdfScale });
 
         const pageContainer = document.createElement('div');
         pageContainer.className = 'page-container';
         pageContainer.dataset.pageNumber = i;
+        pageContainer.innerHTML = `<div class="page-status">Reading page ${i}...</div>`;
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-
-        // Match CSS width to container, but internal canvas size is larger for quality
         canvas.style.width = "100%";
         canvas.style.maxWidth = originalViewport.width * pdfScale + "px";
         canvas.height = viewport.height;
@@ -80,97 +74,125 @@ async function renderPDF() {
         pdfViewer.appendChild(pageContainer);
 
         await page.render({ canvasContext: context, viewport: viewport }).promise;
-        console.log(`DEBUG: Page ${i} rendered`);
 
+        // 2. Extract Text
         const textContent = await page.getTextContent();
-        pageTextContent[i] = textContent.items;
+
+        // Build a mapping for robust multi-word matching
+        // pageTextData stores both raw items and a concatenated normalized string
+        let combinedString = "";
+        let itemMappings = [];
+
+        textContent.items.forEach((item, index) => {
+            const start = combinedString.length;
+            combinedString += item.str + " ";
+            const end = combinedString.length;
+            itemMappings.push({ start, end, item });
+        });
+
+        pageTextData[i] = {
+            items: textContent.items,
+            combinedString: combinedString,
+            mappings: itemMappings
+        };
+
+        // 3. Process with AI (Progressive)
+        processPageText(i, combinedString, pageContainer);
     }
 }
 
-async function processPDFText() {
-    console.log("DEBUG: Extracting text for AI...");
-    let fullText = "";
-    // Only process first 10 pages to keep it fast
-    const maxPages = Math.min(pdfDoc.numPages, 10);
-    for (let i = 1; i <= maxPages; i++) {
-        const page = await pdfDoc.getPage(i);
-        const textContent = await page.getTextContent();
-        fullText += textContent.items.map(item => item.str).join(' ') + " ";
+async function processPageText(pageNum, text, container) {
+    if (!text.trim() || text.length < 20) {
+        const status = container.querySelector('.page-status');
+        if (status) status.remove();
+        return;
     }
 
-    console.log(`DEBUG: Sending ${fullText.length} characters to backend`);
     try {
         const response = await fetch('/api/process-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: fullText })
+            body: JSON.stringify({ text: text })
         });
 
-        if (!response.ok) {
-            const errData = await response.json();
-            throw new Error(errData.detail || "Backend error");
-        }
+        if (!response.ok) throw new Error("Backend error");
 
         const data = await response.json();
-        console.log("DEBUG: Received highlights from backend:", data.highlights);
+        const highlights = JSON.parse(data.highlights);
 
-        const sentencesToHighlight = JSON.parse(data.highlights);
-        console.log(`DEBUG: Applying ${sentencesToHighlight.length} highlights`);
-        applyHighlights(sentencesToHighlight);
+        console.log(`DEBUG: Page ${pageNum} highlights:`, highlights.length);
+        applyHighlightsToPage(pageNum, highlights);
+
     } catch (err) {
-        console.error("DEBUG ERROR: AI Highlighting failed:", err);
-        alert(`Highlighting error: ${err.message}`);
+        console.error(`DEBUG ERROR: Page ${pageNum} AI failed:`, err);
     } finally {
-        loadingOverlay.classList.add('hidden');
+        const status = container.querySelector('.page-status');
+        if (status) status.remove();
     }
 }
 
-function applyHighlights(sentences) {
-    if (!Array.isArray(sentences)) return;
+function applyHighlightsToPage(pageNum, sentences) {
+    if (!Array.isArray(sentences) || sentences.length === 0) return;
 
-    sentences.forEach(sentence => {
-        const cleanSentence = sentence.toLowerCase().trim().replace(/\s+/g, ' ');
-        if (cleanSentence.length < 5) return;
+    const pageData = pageTextData[pageNum];
+    const pageContainer = document.querySelector(`.page-container[data-pageNumber="${pageNum}"]`);
 
-        console.log(`DEBUG: Looking for match for sentence: "${cleanSentence.substring(0, 50)}..."`);
+    pdfDoc.getPage(pageNum).then(page => {
+        const viewport = page.getViewport({ scale: pdfScale });
 
-        for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
-            const items = pageTextContent[pageNum];
-            if (!items) continue;
+        sentences.forEach(sentence => {
+            const cleanSentence = sentence.toLowerCase().trim().replace(/\s+/g, ' ');
+            if (cleanSentence.length < 5) return;
 
-            const pageContainer = document.querySelector(`.page-container[data-pageNumber="${pageNum}"]`);
+            // Search within the combined string for the match
+            const sourceStr = pageData.combinedString.toLowerCase().replace(/\s+/g, ' ');
+            const matchIndex = sourceStr.indexOf(cleanSentence);
 
-            // Use calculated scale
-            pdfDoc.getPage(pageNum).then(page => {
-                const viewport = page.getViewport({ scale: pdfScale });
+            if (matchIndex !== -1) {
+                // If we found a direct match in the combined string,
+                // identify which text items overlap with this match range
+                const matchStart = matchIndex;
+                const matchEnd = matchIndex + cleanSentence.length;
 
-                items.forEach(item => {
+                // Re-calculate the actual character positions in the original combinedString
+                // to account for whitespace normalization if necessary
+                // For simplicity, we fallback to partial matching on items if exact range mapping is too complex
+
+                pageData.items.forEach(item => {
                     const itemStr = item.str.toLowerCase().trim().replace(/\s+/g, ' ');
-                    if (itemStr.length > 2 && (cleanSentence.includes(itemStr) || itemStr.includes(cleanSentence))) {
-                        const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-
-                        const highlight = document.createElement('div');
-                        highlight.className = 'highlight-span';
-                        highlight.style.position = 'absolute';
-
-                        // Positioning based on PDF.js transform
-                        highlight.style.left = tx[4] + 'px';
-                        highlight.style.top = (tx[5] - (item.height * pdfScale)) + 'px';
-                        highlight.style.width = (item.width * pdfScale) + 'px';
-                        highlight.style.height = (item.height * pdfScale * 1.2) + 'px';
-
-                        // Aesthetic effects
-                        const rotation = (Math.random() - 0.5) * 1.5;
-                        highlight.style.transform = `rotate(${rotation}deg)`;
-                        highlight.style.pointerEvents = 'none';
-                        highlight.style.zIndex = '10';
-
-                        pageContainer.appendChild(highlight);
+                    if (itemStr.length > 2 && cleanSentence.includes(itemStr)) {
+                        createHighlightElement(pageContainer, viewport, item);
                     }
                 });
-            });
-        }
+            } else {
+                // Fallback: piece-by-piece matching if sentence is slightly modified by AI
+                pageData.items.forEach(item => {
+                    const itemStr = item.str.toLowerCase().trim().replace(/\s+/g, ' ');
+                    if (itemStr.length > 4 && (cleanSentence.includes(itemStr) || itemStr.includes(cleanSentence))) {
+                        createHighlightElement(pageContainer, viewport, item);
+                    }
+                });
+            }
+        });
     });
+}
+
+function createHighlightElement(container, viewport, item) {
+    const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+    const highlight = document.createElement('div');
+    highlight.className = 'highlight-span';
+    highlight.style.position = 'absolute';
+    highlight.style.left = tx[4] + 'px';
+    highlight.style.top = (tx[5] - (item.height * pdfScale)) + 'px';
+    highlight.style.width = (item.width * pdfScale) + 'px';
+    highlight.style.height = (item.height * pdfScale * 1.3) + 'px';
+
+    const rotation = (Math.random() - 0.5) * 1.5;
+    highlight.style.transform = `rotate(${rotation}deg)`;
+    highlight.style.pointerEvents = 'none';
+    highlight.style.zIndex = '10';
+
+    container.appendChild(highlight);
 }
 
 // Timer & To-Do Logic
